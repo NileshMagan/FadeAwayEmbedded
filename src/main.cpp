@@ -1,106 +1,78 @@
-
-#include <WiFiNINA.h>
-#include <Arduino_JSON.h>
-#include <Wire.h>
+#include <ArduinoBLE.h>
 #include <Arduino_LSM6DS3.h>
 
-const char *ssid = "YoYo-2G";            // replace with your WiFi SSID
-const char *password = "Happy$Boys!!2G"; // replace with your WiFi password
+BLEService imuService("19b10010-e8f2-537e-4f6c-d104768a1214");                                        // Define a custom BLE service
+BLECharacteristic imuCharacteristic("19b10011-e8f2-537e-4f6c-d104768a1214", BLERead | BLENotify, 20); // Define a BLE characteristic for IMU data
 
-WiFiServer server(80);
-WiFiClient client;
-
-void connectToWiFi()
-{
-  Serial.print("Attempting to connect to WiFi");
-  WiFi.begin(ssid, password);
-
-  while (WiFi.status() != WL_CONNECTED)
-  {
-    delay(1000);
-    Serial.print(".");
-  }
-
-  Serial.println();
-  Serial.println("Connected to WiFi");
-}
 void setup()
 {
   Serial.begin(9600);
   while (!Serial)
-    ; // Wait for Serial Monitor to open
+  {
+  }
 
-  // Connect to WiFi
-  connectToWiFi();
-
-  // Initialize IMU sensor
   if (!IMU.begin())
   {
     Serial.println("Failed to initialize IMU!");
     while (1)
       ;
   }
-  Serial.println("IMU initialized");
 
-  Wire.begin();
+  if (!BLE.begin())
+  {
+    Serial.println("Starting BLE failed!");
+    while (1)
+      ;
+  }
 
-  // Start the server
-  server.begin();
-  Serial.println("Server started");
-  Serial.print("IP Address: ");
-  Serial.println(WiFi.localIP());
+  BLE.setLocalName("Nano33IMU"); // Set a name for the Nano 33 BLE peripheral
+  BLE.setAdvertisedService(imuService);
+
+  imuService.addCharacteristic(imuCharacteristic);
+  BLE.addService(imuService);
+
+  imuCharacteristic.setValue("Hello IMU!"); // Initial dummy value
+  BLE.advertise();
+
+  Serial.println("BLE IMU Peripheral is now active, waiting for connections...");
 }
 
 void loop()
 {
-  // Check if a client has connected
-  client = server.available();
-  if (client)
+  BLEDevice central = BLE.central();
+
+  if (central)
   {
-    Serial.println("New client connected");
-    while (client.connected())
+    Serial.print("Connected to central: ");
+    Serial.println(central.address());
+
+    while (central.connected())
     {
-      if (client.available())
+      float ax, ay, az, gx, gy, gz;
+
+      if (IMU.accelerationAvailable() && IMU.gyroscopeAvailable())
       {
-        String request = client.readStringUntil('\r');
-        Serial.println(request);
-        client.flush();
+        // Read accelerometer and gyroscope data
+        IMU.readAcceleration(ax, ay, az);
+        IMU.readGyroscope(gx, gy, gz);
 
-        // Read IMU data
-        float accX, accY, accZ;
-        float gyroX, gyroY, gyroZ;
+        // Format IMU data into a byte array
+        uint8_t imuData[20]; // Adjust the size as needed
+        snprintf((char *)imuData, sizeof(imuData), "%.2f,%.2f,%.2f,%.2f,%.2f,%.2f", ax, ay, az, gx, gy, gz);
 
-        // Read accelerometer data
-        IMU.readAcceleration(accX, accY, accZ);
-
-        // Read gyroscope data
-        IMU.readGyroscope(gyroX, gyroY, gyroZ);
-
-        // Create JSON object
-        JSONVar imuData;
-        imuData["acceleration"]["x"] = accX;
-        imuData["acceleration"]["y"] = accY;
-        imuData["acceleration"]["z"] = accZ;
-        imuData["gyroscope"]["x"] = gyroX;
-        imuData["gyroscope"]["y"] = gyroY;
-        imuData["gyroscope"]["z"] = gyroZ;
-
-        // Convert JSON object to string
-        String jsonString = JSON.stringify(imuData);
-
-        // Send the response to the client
-        client.println("HTTP/1.1 200 OK");
-        client.println("Content-Type: application/json");
-        client.println("Access-Control-Allow-Origin: *"); // Add CORS header
-        client.println("Connection: close");
-        client.println();
-        client.println(jsonString);
-        break;
+        imuCharacteristic.setValue(imuData, sizeof(imuData)); // Update BLE characteristic with IMU data
+        delay(100);                                           // Adjust delay as necessary for your application
       }
+      // float x, y, z;
+      // if (IMU.accelerationAvailable()) {
+      //   IMU.readAcceleration(x, y, z);
+      //   String data = String(x) + "," + String(y) + "," + String(z);
+      //   imuCharacteristic.writeValue(data.c_str());
+      //   delay(100);
+      // }
     }
 
-    // Close the connection
-    client.stop();
-    Serial.println("Client disconnected");
+    Serial.print("Disconnected from central: ");
+    Serial.println(central.address());
   }
 }
